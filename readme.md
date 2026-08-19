@@ -8,6 +8,10 @@ Uses the [`yauzl`](http://npmjs.org/yauzl) ZIP parser.
 [![Uses JS Standard Style](https://cdn.jsdelivr.net/gh/standard/standard/badge.svg)](https://github.com/standard/standard)
 [![Build Status](https://github.com/maxogden/extract-zip/workflows/CI/badge.svg)](https://github.com/maxogden/extract-zip/actions?query=workflow%3ACI)
 
+## Security
+
+**2.0.2 patches [GHSA-x7jf-2287-qcpf](https://github.com/ziad626/extract-zip-security-research/security/advisories/GHSA-x7jf-2287-qcpf) / CVE-2026-56876.** Prior versions followed symlink entries in a zip without validating the target, so a malicious archive could drop a symlink like `innocent.txt -> ../../../../etc/passwd` and any later read or write via the extracted symlink would escape the extraction directory. 2.0.2 refuses symlink entries whose targets are absolute or resolve outside `opts.dir`.
+
 ## Installation
 
 Make sure you have Node 10 or greater installed.

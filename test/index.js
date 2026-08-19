@@ -1,4 +1,5 @@
 const extract = require('../')
+const { assertSafeSymlinkTarget } = require('../')
 const fs = require('fs-extra')
 const os = require('os')
 const path = require('path')
@@ -10,6 +11,7 @@ const noPermissionsZip = path.join(__dirname, 'no-permissions.zip')
 const subdirZip = path.join(__dirname, 'file-in-subdir-without-subdir-entry.zip')
 const symlinkDestZip = path.join(__dirname, 'symlink-dest.zip')
 const symlinkZip = path.join(__dirname, 'symlink.zip')
+const maliciousSymlinkZip = path.join(__dirname, 'malicious-symlink.zip')
 const brokenZip = path.join(__dirname, 'broken.zip')
 
 const relativeTarget = './cats'
@@ -111,9 +113,27 @@ if (process.platform !== 'win32') {
     const dirPath = await mkdtemp(t, 'symlink-destination-disallowed')
     await pathDoesntExist(t, path.join(dirPath, 'file.txt'), "file doesn't exist at symlink target")
 
+    // With GHSA-x7jf-2287-qcpf / CVE-2026-56876 patched, the absolute-target
+    // symlink at symlink-dest/aaa is refused up front, before fs.symlink is
+    // called — so the subsequent write through it never runs either.
     await t.throwsAsync(extract(symlinkDestZip, { dir: dirPath }), {
-      message: /Out of bound path ".*?" found while processing file symlink-dest\/aaa\/file.txt/
+      message: /Refusing to create symlink with absolute target ".*?" for entry symlink-dest\/aaa/
     })
+  })
+
+  // Regression test for GHSA-x7jf-2287-qcpf / CVE-2026-56876. The fixture
+  // contains two symlink entries: one whose relative target escapes opts.dir
+  // and one whose target is absolute. Both must be refused before fs.symlink
+  // is called, so no dangling out-of-bounds link is left on disk.
+  test('malicious symlink target refused (relative escape)', async t => {
+    const dirPath = await mkdtemp(t, 'malicious-symlink-relative')
+
+    await t.throwsAsync(extract(maliciousSymlinkZip, { dir: dirPath }), {
+      message: /Refusing to create symlink (to out-of-bounds target|with absolute target) ".*?" for entry (evil_symlink|absolute_symlink)/
+    })
+
+    await pathDoesntExist(t, path.join(dirPath, 'evil_symlink'), 'escape symlink not created')
+    await pathDoesntExist(t, path.join(dirPath, 'absolute_symlink'), 'absolute-target symlink not created')
   })
 
   test('no file created out of bound', async t => {
@@ -122,10 +142,9 @@ if (process.platform !== 'win32') {
 
     const symlinkDestDir = path.join(dirPath, 'symlink-dest')
 
-    await pathExists(t, symlinkDestDir, 'target folder created')
-    await pathExists(t, path.join(symlinkDestDir, 'aaa'), 'symlink created')
-    await pathExists(t, path.join(symlinkDestDir, 'ccc'), 'parent folder created')
-    await pathDoesntExist(t, path.join(symlinkDestDir, 'ccc/file.txt'), 'file not created in original folder')
+    // Post-fix, the offending symlink at symlink-dest/aaa is never created,
+    // and nothing is written at its would-be escape target.
+    await pathDoesntExist(t, path.join(symlinkDestDir, 'aaa'), 'symlink not created')
     await pathDoesntExist(t, path.join(dirPath, 'file.txt'), 'file not created in symlink target')
   })
 
@@ -153,6 +172,36 @@ if (process.platform !== 'win32') {
 test('files in subdirs where the subdir does not have its own entry is extracted', async t => {
   const dirPath = await tempExtract(t, 'subdir-file', subdirZip)
   await pathExists(t, path.join(dirPath, 'foo', 'bar'), 'file created')
+})
+
+// Unit tests for the symlink target validator introduced to fix
+// GHSA-x7jf-2287-qcpf / CVE-2026-56876. These do not exercise yauzl, so they
+// run on every platform without needing a real filesystem symlink.
+test('assertSafeSymlinkTarget accepts in-bounds relative targets', t => {
+  const root = path.resolve('/tmp/extract-root')
+  t.notThrows(() => assertSafeSymlinkTarget(root, path.join(root, 'a'), 'b'))
+  t.notThrows(() => assertSafeSymlinkTarget(root, path.join(root, 'sub', 'a'), '../other'))
+  t.notThrows(() => assertSafeSymlinkTarget(root, path.join(root, 'a'), '.'))
+})
+
+test('assertSafeSymlinkTarget refuses absolute targets', t => {
+  const root = path.resolve('/tmp/extract-root')
+  t.throws(() => assertSafeSymlinkTarget(root, path.join(root, 'a'), '/etc/passwd'), {
+    message: /Refusing to create symlink with absolute target/
+  })
+})
+
+test('assertSafeSymlinkTarget refuses relative targets that escape opts.dir', t => {
+  const root = path.resolve('/tmp/extract-root')
+  t.throws(() => assertSafeSymlinkTarget(root, path.join(root, 'a'), '../etc/passwd'), {
+    message: /Refusing to create symlink to out-of-bounds target/
+  })
+  t.throws(() => assertSafeSymlinkTarget(root, path.join(root, 'a'), '../../../../etc/passwd'), {
+    message: /Refusing to create symlink to out-of-bounds target/
+  })
+  t.throws(() => assertSafeSymlinkTarget(root, path.join(root, 'sub', 'a'), '../../etc'), {
+    message: /Refusing to create symlink to out-of-bounds target/
+  })
 })
 
 test('extract broken zip', async t => {

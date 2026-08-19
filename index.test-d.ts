@@ -1,5 +1,5 @@
 import { Entry, ZipFile } from 'yauzl';
-import * as extract from '.';
+import extract = require('.');
 
 const zip = '/path/to/zip';
 const dir = '/path/to/dir';

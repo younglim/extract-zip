@@ -1,14 +1,30 @@
 const debug = require('debug')('extract-zip')
-// eslint-disable-next-line node/no-unsupported-features/node-builtins
 const { createWriteStream, promises: fs } = require('fs')
-const getStream = require('get-stream')
 const path = require('path')
 const { promisify } = require('util')
 const stream = require('stream')
+const { text: streamToText } = require('stream/consumers')
 const yauzl = require('yauzl')
 
 const openZip = promisify(yauzl.open)
 const pipeline = promisify(stream.pipeline)
+
+// GHSA-x7jf-2287-qcpf / CVE-2026-56876: a zip entry stored as a symlink
+// carries the target path as its content. A malicious zip can therefore
+// drop an entry like `innocent.txt -> ../../etc/passwd`, and any later
+// read or write through the extracted symlink escapes the extraction dir.
+// Reject absolute targets, and relative targets whose POSIX-resolved path
+// lands outside `extractDir`.
+function assertSafeSymlinkTarget (extractDir, symlinkPath, target) {
+  if (path.isAbsolute(target)) {
+    throw new Error(`Refusing to create symlink with absolute target "${target}" for entry ${path.relative(extractDir, symlinkPath) || symlinkPath}`)
+  }
+  const resolved = path.resolve(path.dirname(symlinkPath), target)
+  const rel = path.relative(extractDir, resolved)
+  if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) {
+    throw new Error(`Refusing to create symlink to out-of-bounds target "${target}" for entry ${path.relative(extractDir, symlinkPath) || symlinkPath}`)
+  }
+}
 
 class Extractor {
   constructor (zipPath, opts) {
@@ -125,7 +141,8 @@ class Extractor {
     const readStream = await promisify(this.zipfile.openReadStream.bind(this.zipfile))(entry)
 
     if (symlink) {
-      const link = await getStream(readStream)
+      const link = await streamToText(readStream)
+      assertSafeSymlinkTarget(this.opts.dir, dest, link)
       debug('creating symlink', link, dest)
       await fs.symlink(link, dest)
     } else {
@@ -171,3 +188,6 @@ module.exports = async function (zipPath, opts) {
   opts.dir = await fs.realpath(opts.dir)
   return new Extractor(zipPath, opts).extract()
 }
+
+// Exposed for unit tests. Not documented as public API.
+module.exports.assertSafeSymlinkTarget = assertSafeSymlinkTarget
