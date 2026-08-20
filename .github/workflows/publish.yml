@@ -52,6 +52,8 @@ jobs:
             npm install
           fi
 
+      - run: npm publish --access public --provenance
+
       - name: Create and push git tags
         if: ${{ !inputs.skip_git_tag }}
         run: |
@@ -61,9 +63,9 @@ jobs:
           git tag -af "${VERSION}" -m "Version ${VERSION}"
           git push origin "${VERSION}" --force
           git tag -af "latest" -m "Latest release ${VERSION}"
-          git push origin "latest" --force
-
-      - run: npm publish --access public --provenance
+          if ! git push origin "latest" --force; then
+            echo "::warning::Unable to push 'latest' tag with GITHUB_TOKEN permissions. Publish already completed."
+          fi
 
   unpublish:
     if: ${{ inputs.action == 'unpublish' }}
