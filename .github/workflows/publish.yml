@@ -37,7 +37,6 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22.x'
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Upgrade npm (trusted publishing needs >= 11.5.1)
         run: |
