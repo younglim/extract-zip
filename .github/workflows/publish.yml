@@ -44,8 +44,13 @@ jobs:
           npm install -g npm@latest
           npm --version
 
-      - run: npm ci
-        continue-on-error: false
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
 
       - name: Create and push git tags
         if: ${{ !inputs.skip_git_tag }}
